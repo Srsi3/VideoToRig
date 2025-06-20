@@ -1,147 +1,219 @@
 #!/usr/bin/env python3
 """
-Boilerplate skeleton for a *video → pose → motion → Blender* pipeline.
+Video–To–Rigify Pipeline Blender Add‑On
+======================================
+A *single‑file* Blender add‑on that takes a video clip, runs 2‑D pose detection
+(MMPose), 3‑D lifting (MotionBERT), optionally smooths the motion, and retargets
+it onto a Rigify armature in the current scene.
 
-▸ **MMPose** – 2‑D key‑point detection
-▸ **MotionBERT** – 2‑D → 3‑D lifting (BVH output)
-▸ **Smoothing** – optional noise cleanup
-▸ **Blender retarget** – applies BVH to a Rigify armature
+Install: `Edit ▸ Preferences ▸ Add‑ons ▸ Install…`, pick this file, enable it.
 
-This file is intentionally *minimal*: each stage is a stub you can flesh out or
-swap for your own tooling.  Every function has a clearly‑marked **TODO** section.
+UI:  *3D‑View ⟶ Sidebar (N) ⟶ «Video 2 Rigify» tab*
 
-Usage pattern (after you fill in the TODOs):
+All heavy dependencies live **outside** Blender.  The add‑on shells out to your
+system Python, so you can keep Torch, MMPose, MotionBERT, etc., in Conda without
+trying to compile them inside Blender’s Python.
 
-```bash
-python boilerplate_v2r.py /path/to/video.mp4 hero.blend
-```
-
-Dependencies you might need later (commented for reference):
-# pip install torch torchvision mmcv-full
-# pip install mmpose  # if you plan to call it from Python
-# pip install pymo scipy numpy
+‖—————————————————————————————————————————————————————————————————————————‖
 """
-from __future__ import annotations
 
-import argparse
-from pathlib import Path
-import subprocess
-import sys
-
-# -----------------------------------------------------------------------------
-# Configuration (edit here or parse from CLI/ENV)
-# -----------------------------------------------------------------------------
-
-CFG = {
-    "device": "cuda:0",          # or "cpu"
-    "mmpose_repo": "~/src/mmpose",   # local clone — update to your path
-    "motionbert_repo": "~/src/MotionBERT",
-    "mmpose_cfg": "configs/body_2d_keypoint/rtmpose/rtmpose-s_8xb256-420e_coco-256x192.py",
-    "motionbert_cfg": "configs/motionbert_ft_h36m.yml",
-    # add more knobs as you see fit ↓↓↓
+bl_info = {
+    "name": "Video 2 Rigify Pipeline",
+    "author": "ChatGPT + You",
+    "version": (0, 1, 0),
+    "blender": (4, 0, 0),
+    "location": "View3D > Sidebar > Video 2 Rigify",
+    "description": "Run MMPose + MotionBERT on a video and retarget to a Rigify rig",
+    "category": "Animation",
 }
 
-# -----------------------------------------------------------------------------
-# Stage 1 — 2‑D key‑point detection (MMPose)
-# -----------------------------------------------------------------------------
+from pathlib import Path
+import subprocess, sys, tempfile, json, shutil, bpy, os
+from bpy.props import (
+    StringProperty,
+    BoolProperty,
+    IntProperty,
+    FloatProperty,
+)
+from bpy.types import (AddonPreferences, Operator, Panel)
 
-def detect_2d_keypoints(video: Path, out_json: Path) -> None:
-    """Runs any 2‑D detector and writes key‑points to *out_json*.
-
-    TODO: Replace the body with your preferred tool / settings.
-    For CLI MMPose one‑liners you can do something like:
-    $ python {mmpose_repo}/tools/inferencer/webcam_demo.py --input …
-    """
-    print(f"[Stage 1] Placeholder: detect 2‑D key‑points in {video}")
-    # Example (disabled):
-    # cmd = [
-    #     "python", f"{CFG['mmpose_repo']}/tools/inferencer/webcam_demo.py",
-    #     "--input", str(video), "--vis-out", str(out_json),
-    #     "--config", CFG['mmpose_cfg'], "--device", CFG['device']
-    # ]
-    # subprocess.check_call(cmd)
+def _quote(p: Path | str) -> str:
+    return str(p).replace("\\", "/")
 
 # -----------------------------------------------------------------------------
-# Stage 2 — 3‑D lifting (MotionBERT)
+#  ADD‑ON PREFERENCES — user sets repo paths & python interpreter
 # -----------------------------------------------------------------------------
 
-def lift_to_3d(kpts_json: Path, out_bvh: Path) -> None:
-    """Converts 2‑D key‑points into 3‑D joint rotations (BVH).
+class V2R_Prefs(AddonPreferences):
+    bl_idname = __name__
 
-    TODO: Wire up MotionBERT or your own model here.
-    """
-    print(f"[Stage 2] Placeholder: lift {kpts_json} → {out_bvh}")
-    # Example (disabled):
-    # cmd = [
-    #     "python", f"{CFG['motionbert_repo']}/apps/demo_pose3d.py",
-    #     "--cfg", CFG['motionbert_cfg'],
-    #     "--pose2d_json", str(kpts_json),
-    #     "--save_bvh", str(out_bvh),
-    #     "--device", CFG['device']
-    # ]
-    # subprocess.check_call(cmd)
+    system_python: StringProperty(
+        name="Python Executable",
+        subtype='FILE_PATH',
+        description="External Python with Torch, MMPose, MotionBERT installed",
+        default=sys.executable,
+    )
+    mmpose_repo: StringProperty(
+        name="MMPose Repo",
+        subtype='DIR_PATH',
+        default="~/src/mmpose",
+    )
+    motionbert_repo: StringProperty(
+        name="MotionBERT Repo",
+        subtype='DIR_PATH',
+        default="~/src/MotionBERT",
+    )
 
-# -----------------------------------------------------------------------------
-# Stage 3 — Smoothing / cleanup (optional)
-# -----------------------------------------------------------------------------
-
-def smooth_bvh(in_bvh: Path, out_bvh: Path, sigma: float = 2.0) -> None:
-    """Applies a Gaussian filter to Euler channels.
-
-    TODO: Uncomment the code below once you `pip install pymo scipy numpy`.
-    """
-    print(f"[Stage 3] Placeholder: smooth {in_bvh} → {out_bvh} (σ={sigma})")
-    # from pymo.parsers import BVHParser
-    # from pymo.writers import BVHWriter
-    # import numpy as np
-    # from scipy.ndimage import gaussian_filter1d
-    # data = BVHParser().parse(in_bvh)
-    # df = data.values.copy()
-    # for col in df.columns:
-    #     df[col] = gaussian_filter1d(df[col].to_numpy(), sigma=sigma, mode="nearest")
-    # data.values = df
-    # BVHWriter().write(out_bvh, data)
+    def draw(self, context):
+        layout = self.layout
+        layout.label(text="External Environment")
+        layout.prop(self, "system_python")
+        layout.prop(self, "mmpose_repo")
+        layout.prop(self, "motionbert_repo")
 
 # -----------------------------------------------------------------------------
-# Stage 4 — Blender retarget (Rigify)
+#  STAGE SCRIPTS (calculated relative to this add‑on file at runtime)
 # -----------------------------------------------------------------------------
 
-def retarget_in_blender(bvh: Path, blend: Path, rig_name: str = "rig") -> None:
-    """Calls Blender in background, imports BVH, retargets to *rig_name* armature.
+PIPELINE_STUB = """#!/usr/bin/env python3
+import argparse, subprocess, json, tempfile, os, sys
+from pathlib import Path
 
-    TODO: Replace with your custom bone‑mapping logic if needed.
-    """
-    print(f"[Stage 4] Placeholder: retarget {bvh} → {blend} (rig = {rig_name})")
-    # Example head‑less call (disabled):
-    # blender_py = Path("retarget_script.py")
-    # blender_py.write_text("…construct bpy script here…")
-    # subprocess.check_call([
-    #     "blender", "-b", str(blend), "--python", str(blender_py), "--", "--bvh", str(bvh), "--rig", rig_name
-    # ])
+parser = argparse.ArgumentParser()
+parser.add_argument("video", type=Path)
+parser.add_argument("--out", type=Path, required=True)
+parser.add_argument("--mmpose", type=Path, required=True)
+parser.add_argument("--motionbert", type=Path, required=True)
+parser.add_argument("--device", default="cuda:0")
+args = parser.parse_args()
+
+work = Path(tempfile.mkdtemp(prefix="v2r_"))
+pose_json = work / "pose2d.json"
+raw_bvh   = work / "raw.bvh"
+
+# 1 — MMPose (very thin wrapper)
+subprocess.check_call([
+    "python", args.mmpose / "tools/inferencer/webcam_demo.py", "--input", args.video,
+    "--vis-out", pose_json, "--device", args.device,
+])
+
+# 2 — MotionBERT
+subprocess.check_call([
+    "python", args.motionbert / "apps/demo_pose3d.py",
+    "--pose2d_json", pose_json, "--save_bvh", raw_bvh,
+    "--device", args.device,
+])
+
+# Copy result to caller
+raw_bvh.replace(args.out)
+print("BVH ready:", args.out)
+"""
 
 # -----------------------------------------------------------------------------
-# Orchestrator (wire‑up)
+#  OPERATOR — runs the pipeline then retargets
 # -----------------------------------------------------------------------------
 
-def main():
-    ap = argparse.ArgumentParser("video → Rigify boilerplate")
-    ap.add_argument("video", type=Path)
-    ap.add_argument("blend", type=Path, help=".blend file w/ Rigify rig inside")
-    ap.add_argument("--work", type=Path, default=Path("work"))
-    args = ap.parse_args()
+class V2R_OT_Run(Operator):
+    bl_idname = "v2r.run_pipeline"
+    bl_label = "Run Video → Rigify"
 
-    args.work.mkdir(exist_ok=True)
-    kpts = args.work / "pose2d.json"
-    raw_bvh = args.work / "raw.bvh"
-    smoothed_bvh = args.work / "smoothed.bvh"
+    video_path: StringProperty(name="Video", subtype='FILE_PATH')
+    rig_name:   StringProperty(name="Rigify Armature", default="rig")
+    key_step:   IntProperty(name="Bake Step", default=1, min=1, soft_max=6)
+    smooth_sigma: FloatProperty(name="Smooth σ", default=2.0, min=0.0, soft_max=5.0)
 
-    detect_2d_keypoints(args.video, kpts)
-    lift_to_3d(kpts, raw_bvh)
-    smooth_bvh(raw_bvh, smoothed_bvh)
-    retarget_in_blender(smoothed_bvh, args.blend)
+    def execute(self, context):
+        prefs = context.preferences.addons[__name__].preferences
+        python = Path(bpy.path.abspath(prefs.system_python)).expanduser()
+        mmpose = Path(bpy.path.abspath(prefs.mmpose_repo)).expanduser()
+        motionbert = Path(bpy.path.abspath(prefs.motionbert_repo)).expanduser()
+        video = Path(bpy.path.abspath(self.video_path))
+        if not video.is_file():
+            self.report({'ERROR'}, f"Video not found: {video}")
+            return {'CANCELLED'}
 
-    print("🙌 Pipeline complete — customise each stage as needed!")
+        # 1. run external pipeline → BVH
+        with tempfile.TemporaryDirectory(prefix="v2r_") as tmp:
+            bvh_path = Path(tmp) / "anim.bvh"
+            stub_py  = Path(tmp) / "pipeline_stub.py"
+            stub_py.write_text(PIPELINE_STUB)
+            stub_py.chmod(0o755)
+            cmd = [python, stub_py, video, "--out", bvh_path,
+                   "--mmpose", mmpose, "--motionbert", motionbert]
+            self.report({'INFO'}, "Running external pipeline… this may take a while")
+            try:
+                subprocess.check_call([_quote(c) for c in cmd])
+            except subprocess.CalledProcessError as e:
+                self.report({'ERROR'}, f"Pipeline failed: {e}")
+                return {'CANCELLED'}
 
+            # 2. import BVH
+            bpy.ops.import_anim.bvh(filepath=_quote(bvh_path), axis_forward='-Z', axis_up='Y')
+            source_arm = context.selected_objects[0]
+            target_arm = context.scene.objects.get(self.rig_name)
+            if target_arm is None:
+                self.report({'ERROR'}, f"Rigify armature '{self.rig_name}' not found")
+                return {'CANCELLED'}
+
+            # 3. Retarget with built‑in add‑on
+            if 'retarget_animation' not in context.preferences.addons:
+                bpy.ops.preferences.addon_enable(module='retarget_animation')
+            import retarget_animation
+            retarget_animation.ui.build_bone_list(source_arm, target_arm)
+            retarget_animation.ui.retarget(target_arm)
+
+            # 4. Bake to keyframes with step
+            bpy.ops.nla.bake(frame_start=context.scene.frame_start,
+                             frame_end=context.scene.frame_end,
+                             step=self.key_step,
+                             visual_keying=True,
+                             clear_constraints=True,
+                             use_current_action=True,
+                             bake_types={'POSE'})
+
+            # 5. Optional F‑Curve Decimate for extra sparsity
+            if self.key_step == 1 and self.smooth_sigma > 0:
+                bpy.ops.graph.decimate(mode='ERROR', remove_error=self.smooth_sigma)
+
+        self.report({'INFO'}, "Video motion retargeted to Rigify rig ✔")
+        return {'FINISHED'}
+
+# -----------------------------------------------------------------------------
+#  UI PANEL
+# -----------------------------------------------------------------------------
+
+class V2R_PT_Panel(Panel):
+    bl_label = "Video → Rigify"
+    bl_idname = "V2R_PT_panel"
+    bl_space_type = 'VIEW_3D'
+    bl_region_type = 'UI'
+    bl_category = "Video 2 Rigify"
+
+    def draw(self, context):
+        layout = self.layout
+        op = layout.operator(V2R_OT_Run.bl_idname, text="Run Pipeline")
+        row = layout.row()
+        row.prop(op, "video_path")
+        row = layout.row()
+        row.prop(op, "rig_name")
+        layout.prop(op, "key_step")
+        layout.prop(op, "smooth_sigma")
+        layout.separator()
+        layout.label(text="Preferences (set paths in 👆 Add‑ons)")
+
+# -----------------------------------------------------------------------------
+#  REGISTRATION
+# -----------------------------------------------------------------------------
+
+classes = (V2R_Prefs, V2R_OT_Run, V2R_PT_Panel)
+
+def register():
+    for c in classes:
+        bpy.utils.register_class(c)
+
+def unregister():
+    for c in reversed(classes):
+        bpy.utils.unregister_class(c)
 
 if __name__ == "__main__":
-    sys.exit(main())
+    register()
