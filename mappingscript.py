@@ -108,13 +108,14 @@ class V2R_OT_InstallDeps(Operator):
         base_pkgs = [
             "openmim", "mmengine", "numpy", "scipy", "pymo", "mmpose==1.3.1",
         ]
-        if self.gpu and platform.system() == "Linux":
+        if self.gpu and platform.system() in {"Linux", "Windows"}:
             base_pkgs += [
                 "torch==2.3.0+cu121", "torchvision==0.18.0+cu121",
                 "torchaudio==2.3.0+cu121",
                 "--extra-index-url", "https://download.pytorch.org/whl/cu121",
                 "mmcv==2.0.1",
             ]
+
         else:
             base_pkgs += [
                 "torch==2.3.0+cpu", "torchvision==0.18.0+cpu", "torchaudio==2.3.0+cpu",
