@@ -1,29 +1,29 @@
 #!/usr/bin/env python3
 """
-Video‑To‑Rigify Pipeline — self‑installing add‑on
+Video-To-Rigify Pipeline — self-installing add-on
 =================================================
-This version adds **one‑click dependency setup** *without polluting Blender’s own
+This version adds **one-click dependency setup** *without polluting Blender own
 Python*.  When the user presses *Install Dependencies* we:
 
-1. Create a **virtual‑env** inside Blender’s config folder (`…/config/video2rigify_env`).
-2. `pip install` the required wheels (CPU‑only by default; CUDA 12 wheels if the
+1. Create a **virtual-env** inside Blender's config folder (`…/config/video2rigify_env`).
+2. `pip install` the required wheels (CPU-only by default; CUDA 12 wheels if the
    user checks “GPU”).
-3. Auto‑download the MotionBERT checkpoint.
-4. Save the venv’s *python* path in the add‑on preferences.
+3. Auto-download the MotionBERT checkpoint.
+4. Save the venv's *python* path in the add-on preferences.
 
 ▶  After that, the main operator always calls that external python, so heavy ML
    libs stay isolated from Blender.
 
-Compatible with Blender 4? → YES (uses built‑in venv & subprocess).
+Compatible with Blender 4? → YES (uses built-in venv & subprocess).
 """
 
 bl_info = {
-    "name": "Video 2 Rigify Pipeline (auto‑setup)",
+    "name": "Video 2 Rigify Pipeline (auto-setup)",
     "author": "ChatGPT + You",
     "version": (0, 3, 0),
     "blender": (4, 0, 0),
     "location": "View3D > Sidebar > Video 2 Rigify",
-    "description": "Video → MMPose → MotionBERT → Rigify with one‑click dependency install",
+    "description": "Video → MMPose → MotionBERT → Rigify with one-click dependency install",
     "category": "Animation",
 }
 
