@@ -28,7 +28,7 @@ bl_info = {
 }
 
 from pathlib import Path
-import bpy, subprocess, sys, tempfile, importlib.util, platform, venv, urllib.request, json, os
+import bpy, shutil, subprocess, sys, tempfile, importlib.util, platform, venv, urllib.request, json, os
 from bpy.props import (StringProperty, BoolProperty, IntProperty, FloatProperty)
 from bpy.types import (AddonPreferences, Operator, Panel)
 
@@ -80,6 +80,12 @@ class V2R_Prefs(AddonPreferences):
         col.prop(self, "mmpose_repo")
         col.prop(self, "motionbert_repo")
         col.operator("v2r.install_deps", icon="CONSOLE")
+
+        col.separator()
+        col.label(text="Maintenance", icon='TRASH')
+        op = col.operator("v2r.uninstall",
+                          text="Remove Video2Rigify Data",
+                          icon='TRASH')
 
 # -----------------------------------------------------------------------------
 #  Operator: install dependencies into isolated venv
@@ -261,11 +267,59 @@ class V2R_PT_Panel(Panel):
         layout.prop(op, 'video_path'); layout.prop(op, 'rig_name'); layout.prop(op, 'bake_step'); layout.prop(op, 'err_tol')
         layout.separator(); layout.label(text="Install/Update dependencies in Add‑ons Prefs →")
 
+
+# removal code
+class V2R_OT_Uninstall(bpy.types.Operator):
+    """Delete the virtual-env, auto-cloned repos and checkpoint"""
+    bl_idname = "v2r.uninstall"
+    bl_label  = "Remove Video2Rigify Data"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    def execute(self, context):
+        prefs = context.preferences.addons[__name__].preferences
+
+        # 1 — delete virtual-env created by installer
+        cfg_dir = Path(bpy.utils.user_resource('CONFIG'))
+        venv    = cfg_dir / "video2rigify_env"
+        nuke(venv)
+
+        # 2 — delete auto-cloned repos (only if they sit in CONFIG dir)
+        mmpose    = Path(prefs.mmpose_repo)    if prefs.mmpose_repo else None
+        motionbert= Path(prefs.motionbert_repo)if prefs.motionbert_repo else None
+        for repo in (mmpose, motionbert):
+            if repo and repo.exists() and repo.is_relative_to(cfg_dir):
+                nuke(repo)
+
+        # 3 — clear prefs so next launch doesn’t reference dead paths
+        prefs.python_exe    = ""
+        prefs.mmpose_repo   = ""
+        prefs.motionbert_repo = ""
+        self.report({'INFO'}, "Video2Rigify data removed. "
+                              "Disable the add-on to finish uninstall.")
+        return {'FINISHED'}
+
+
+def nuke(path: Path):
+    """Recursively delete a file or directory with error handling."""
+    try:
+        if path.is_dir():
+            shutil.rmtree(path)
+        elif path.exists():
+            path.unlink()
+    except Exception as e:
+        print(f"[Video2Rigify] Could not remove {path}: {e}")
+
 # -----------------------------------------------------------------------------
 #  Registration helpers
 # -----------------------------------------------------------------------------
 
-classes = (V2R_Prefs, V2R_OT_InstallDeps, V2R_OT_Run, V2R_PT_Panel)
+classes = (
+    V2R_OT_InstallDeps,
+    V2R_OT_Run,
+    V2R_OT_Uninstall,   # ← NEW
+    V2R_Prefs,
+    V2R_PT_Panel,
+)
 
 def register():
     for c in classes: bpy.utils.register_class(c)
@@ -276,3 +330,6 @@ def register():
 
 def unregister():
     for c in reversed(classes): bpy.utils.unregister
+
+
+
