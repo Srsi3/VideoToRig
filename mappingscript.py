@@ -1,14 +1,9 @@
 #!/usr/bin/env python3
-"""
-Video-to-Rigify Pipeline — multi-person version
-==============================================
-* GPU-optional one-click dependency installer (isolated venv)
-* Multi-person 2-D tracking → per-track MotionBERT → many BVHs
-* Auto-retarget onto duplicated Rigify rigs (or stack actions)
-* Extremes-aware key-reduction
-* Safe un-installer
-"""
-
+#Todo
+#testing
+#check how good rigify motionBERT conversion works
+#update UI
+#see if video liks could work
 
 
 # ------------------------------------------------------------------
@@ -17,8 +12,8 @@ Video-to-Rigify Pipeline — multi-person version
 from __future__ import annotations
 
 bl_info = {
-    "name":        "Video 2 Rigify Pipeline (multi-person)",
-    "author":      "ChatGPT + You",
+    "name":        "Multi-Person Video-2-Rigify",
+    "author":      "Samir Saldanha",
     "version":     (0, 4, 0),
     "blender":     (4, 0, 0),
     "location":    "View3D ▸ Sidebar ▸ Video 2 Rigify",
