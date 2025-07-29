@@ -9,6 +9,13 @@ Video-to-Rigify Pipeline — multi-person version
 * Safe un-installer
 """
 
+
+
+# ------------------------------------------------------------------
+#  Imports
+# ------------------------------------------------------------------
+from __future__ import annotations
+
 bl_info = {
     "name":        "Video 2 Rigify Pipeline (multi-person)",
     "author":      "ChatGPT + You",
@@ -19,13 +26,9 @@ bl_info = {
     "category":    "Animation",
 }
 
-# ------------------------------------------------------------------
-#  Imports
-# ------------------------------------------------------------------
-from __future__ import annotations
 import bpy, shutil, subprocess, sys, tempfile, importlib.util, platform, venv, urllib.request, json, os
 from pathlib import Path
-from typing_extensions import Annotated                     # Pylance-friendly !
+from typing import Annotated
 from bpy.types   import AddonPreferences, Operator, Panel
 from bpy.props   import (StringProperty, BoolProperty,
                           IntProperty, FloatProperty)
@@ -83,12 +86,14 @@ class V2R_OT_InstallDeps(Operator):
         py = get_venv_python(env_path)
 
         # 2 — pip wheels
-        pkgs = ["openmim", "mmengine", "numpy", "scipy", "pymo", "mmpose==1.3.1"]
+        pkgs = ["openmim", "mmengine", "numpy", "scipy", "pymo",
+                "chumpy @ git+https://github.com/vchoutas/chumpy.git#egg=chumpy",
+                "mmpose==1.3.1"]
         if self.gpu and platform.system() in {"Linux", "Windows"}:
             pkgs += ["torch==2.3.0+cu121", "torchvision==0.18.0+cu121", "torchaudio==2.3.0+cu121",
                      "--extra-index-url", "https://download.pytorch.org/whl/cu121", "mmcv==2.0.1"]
         else:
-            pkgs += ["torch==2.3.0+cpu", "torchvision==0.18.0+cpu", "torchaudio==2.3.0+cpu", "mmcv==2.0.1"]
+            pkgs += ["torch==2.3.0", "torchvision==0.18.0", "torchaudio==2.3.0", "mmcv==2.0.1"]
 
         self.report({'INFO'}, "Installing wheels …")
         if subprocess.call([str(py), "-m", "pip", "install", "--upgrade", *pkgs]) != 0:
