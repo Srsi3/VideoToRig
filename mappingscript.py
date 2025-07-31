@@ -79,11 +79,22 @@ class V2R_OT_InstallDeps(Operator):
             venv.create(env_path, with_pip=True, clear=False)
 
         py = get_venv_python(env_path)
-
+        # 0 — guarantee tool-chain inside the venv  (pip ≥ 24 fixes many PEP-517 quirks)
+        subprocess.check_call([str(py), "-m", "pip", "install", "-U",
+                              "pip", "setuptools", "wheel"])
         # 2 — pip wheels
-        pkgs = ["openmim", "mmengine", "numpy", "scipy", "pymo",
-                "chumpy @ git+https://github.com/vchoutas/chumpy.git#egg=chumpy",
-                "mmpose==1.3.1"]
+        pkgs = [
+            "openmim", "mmengine", "numpy", "scipy",
+
+            "--no-build-isolation", "--no-binary=pymo", "pymo==0.2.0",
+            # chumpy fixes
+            "chumpy-fork==0.71",
+            "--no-build-isolation", "chumpy==0.70",
+
+            "mmpose==1.3.1",
+        ]
+
+
         if self.gpu and platform.system() in {"Linux", "Windows"}:
             pkgs += ["torch==2.3.0+cu121", "torchvision==0.18.0+cu121", "torchaudio==2.3.0+cu121",
                      "--extra-index-url", "https://download.pytorch.org/whl/cu121", "mmcv==2.0.1"]
@@ -277,13 +288,16 @@ class V2R_OT_Uninstall(Operator):
     bl_options = {'REGISTER', 'UNDO'}
 
     def execute(self, ctx):
-        prefs   = ctx.preferences.addons[__name__].preferences
+        addon   = ctx.preferences.addons.get(__name__)
+        prefs   = addon.preferences if addon else None
         cfg_dir = Path(bpy.utils.user_resource('CONFIG'))
         nuke(cfg_dir / ENV_DIRNAME)
-        for repo in (prefs.mmpose_repo, prefs.motionbert_repo):
+        for repo in (getattr(prefs, "mmpose_repo", ""),
+                     getattr(prefs, "motionbert_repo", "")):
             p = Path(repo) if repo else None
             if p and p.exists() and p.is_relative_to(cfg_dir):  nuke(p)
-        prefs.python_exe = prefs.mmpose_repo = prefs.motionbert_repo = ""
+        if prefs:
+            prefs.python_exe = prefs.mmpose_repo = prefs.motionbert_repo = ""
         self.report({'INFO'}, "Video2Rigify data removed — disable add-on to finish")
         return {'FINISHED'}
 
