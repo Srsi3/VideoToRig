@@ -68,7 +68,14 @@ class V2R_OT_InstallDeps(Operator):
     gpu: BoolProperty(name="GPU (CUDA 12.1)", default=False)
 
     def execute(self, ctx):
-        prefs      = ctx.preferences.addons[__name__].preferences
+        prefs = ctx.preferences.addons[__name__].preferences
+        missing = [p for p in ("mmpose_repo", "motionbert_repo", "python_exe")
+                   if not hasattr(prefs, p)]
+        if missing:
+            self.report({'ERROR'},
+                "Add-on just updated. Disable it, save preferences, restart "
+                "Blender, then enable it again.")
+            return {'CANCELLED'}
         cfg_dir    = Path(bpy.utils.user_resource('CONFIG'))
         env_path   = cfg_dir / ENV_DIRNAME
         env_path.mkdir(parents=True, exist_ok=True)
@@ -79,9 +86,9 @@ class V2R_OT_InstallDeps(Operator):
             venv.create(env_path, with_pip=True, clear=False)
 
         py = get_venv_python(env_path)
-        # 0 — guarantee tool-chain inside the venv  (pip ≥ 24 fixes many PEP-517 quirks)
-        subprocess.check_call([str(py), "-m", "pip", "install", "-U",
-                              "pip", "setuptools", "wheel"])
+        # 0 — unify build tools *without* breaking openxlab’s pin
+        subprocess.check_call([str(py), "-m", "pip", "install", "-U", "pip", "wheel"])
+        subprocess.check_call([str(py), "-m", "pip", "install", "setuptools==60.2.0"])
         # 2 — pip wheels
         pkgs = [
             "openmim", "mmengine", "numpy", "scipy",
@@ -289,7 +296,7 @@ class V2R_OT_Uninstall(Operator):
 
     def execute(self, ctx):
         addon   = ctx.preferences.addons.get(__name__)
-        prefs   = addon.preferences if addon else None
+        prefs   = addon.preferences if addon and hasattr(addon, "preferences") else None
         cfg_dir = Path(bpy.utils.user_resource('CONFIG'))
         nuke(cfg_dir / ENV_DIRNAME)
         for repo in (getattr(prefs, "mmpose_repo", ""),
