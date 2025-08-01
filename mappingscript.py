@@ -153,50 +153,48 @@ class V2R_OT_InstallDeps(Operator):
             subprocess.call(["git", "clone", "https://github.com/Walter0807/MotionBERT", prefs.motionbert_repo])
 
         # 4 — download MotionBERT checkpoint
+        #   • First try a bundled copy: <addon>/resources/mb_ft_h36m.bin
+        #   • Otherwise fall back to OneDrive (public) → HuggingFace (+token)
 
-        #   • First look for a bundled copy inside the add-on’s resources folder.
-        #   • If not shipped, fall back to Hugging Face / OneDrive download.
-        import importlib.resources as pkg_resources
-
-        ckpt_name  = "latest_epoch.bin"  # or "mb_lite.bin" if you prefer
+        import importlib.resources as ires   # ✅ zip-safe API
+        ckpt_name  = "mb_ft_h36m.bin"        # or "mb_lite.bin" if you prefer
         ckpt_path  = Path(prefs.motionbert_repo) / "checkpoints" / ckpt_name
         ckpt_path.parent.mkdir(parents=True, exist_ok=True)
+
+        def _copy_bundled(dst: Path) -> bool:
+            """Return True iff a bundled file was found & copied to *dst*."""
+            # ❶ New zip-friendly lookup (files/__name__)
+            try:
+                res = ires.files(__name__).joinpath("resources", ckpt_name)
+                if res.is_file():
+                    with res.open("rb") as src, open(dst, "wb") as out:
+                        shutil.copyfileobj(src, out)
+                    return True
+            except Exception:
+                pass
+            # ❷ Plain filesystem fallback (<this-dir>/resources/)
+            try:
+                fs = Path(__file__).parent / "resources" / ckpt_name
+                if fs.is_file():
+                    shutil.copy2(fs, dst)
+                    return True
+            except Exception:
+                pass
+            return False
 
         if ckpt_path.exists():
             self.report({'INFO'}, f"Checkpoint {ckpt_name} already present ✔")
 
-        else:
-            # ❶ try bundled resource
-            try:
-                with pkg_resources.path(__package__, f"resources/{ckpt_name}") as p:
-                    if p.is_file():
-                        shutil.copy2(p, ckpt_path)
-                        self.report({'INFO'}, f"Bundled checkpoint copied → {ckpt_path}")
-            except FileNotFoundError:
-                pass
+        elif _copy_bundled(ckpt_path):
+            self.report({'INFO'}, f"Bundled checkpoint copied → {ckpt_path}")
 
-            # ❷ if still missing, fall back to online download
-            if not ckpt_path.exists():
-                self.report({'INFO'}, "Bundled checkpoint not found → downloading …")
-                try:
-                    # OneDrive public link is token-free; keeps HF as second choice
-                    url = ("https://1drv.ms/u/s!AaaaBBBcccDDD?download=1"
-                        if use_onedrive else
-                        "https://huggingface.co/walter0807/MotionBERT/"
-                        f"resolve/main/{ckpt_name}")
-                    headers = {}
-                    token = os.getenv("HF_TOKEN")
-                    if "huggingface" in url and token:
-                        headers["Authorization"] = f"Bearer {token}"
-                    req = urllib.request.Request(url, headers=headers)
-                    with urllib.request.urlopen(req) as r, open(ckpt_path, "wb") as f:
-                        shutil.copyfileobj(r, f)
-                    self.report({'INFO'}, f"Downloaded {ckpt_name} ✔")
-                except Exception as e:
-                    self.report(
-                        {'WARNING'},
-                        f"Could not obtain checkpoint automatically: {e}\n"
-                        "→ place the file in MotionBERT/checkpoints/ manually.")
+        else:
+
+            self.report(
+                {'WARNING'},
+                f"Could not obtain checkpoint automatically: {e}\n"
+                "→ place the file in MotionBERT/checkpoints/ manually.")
+
 
         # Save python path
         prefs.python_exe = str(py)
