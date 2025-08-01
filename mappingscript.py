@@ -36,7 +36,6 @@ MB_CKPT_URL   = "https://huggingface.co/walter0807/MotionBERT/resolve/main/mb_ft
 ENV_DIRNAME   = "video2rigify_env"
 
 def missing_modules():
-    # This checks Blender's embedded Python, not the external venv—used only for a friendly popup.
     return [m for m in REQ_MODULES if importlib.util.find_spec(m) is None]
 
 def get_venv_python(env_path: Path) -> Path:
@@ -50,7 +49,7 @@ def addon_prefs():
 #  Preferences
 # ------------------------------------------------------------------
 class V2R_Prefs(AddonPreferences):
-    bl_idname = ADDON_ID  # IMPORTANT: tie prefs to this module id
+    bl_idname = ADDON_ID
 
     python_exe: StringProperty(
         name="External Python",
@@ -60,23 +59,30 @@ class V2R_Prefs(AddonPreferences):
     mmpose_repo: StringProperty(
         name="MMPose Repo",
         subtype='DIR_PATH',
-        description="Auto-cloned if empty",
+        description="Auto‑cloned if empty",
         default=""
     )
     motionbert_repo: StringProperty(
         name="MotionBERT Repo",
         subtype='DIR_PATH',
-        description="Auto-cloned if empty",
+        description="Auto‑cloned if empty",
         default=""
     )
 
-    def draw(self, ctx):
+    # ----------------------------- UI -----------------------------
+    def draw(self, _ctx):
         col = self.layout.column()
         col.label(text="Environment:")
         col.prop(self, "python_exe")
         col.prop(self, "mmpose_repo")
         col.prop(self, "motionbert_repo")
-        col.operator("v2r.install_deps", icon="CONSOLE")
+
+        col.label(text="Install / Update:")
+        row = col.row()
+        # Two explicit buttons so users never have to open the redo pop‑over
+        row.operator("v2r.install_deps", text="Install Deps (CPU)", icon="CONSOLE").gpu = False
+        row.operator("v2r.install_deps", text="Install Deps (GPU)", icon="GPU").gpu = True
+
         col.separator()
         col.label(text="Maintenance", icon='TRASH')
         col.operator("v2r.uninstall", text="Remove Video2Rigify Data", icon='TRASH')
@@ -87,43 +93,39 @@ class V2R_Prefs(AddonPreferences):
 class V2R_OT_InstallDeps(Operator):
     bl_idname = "v2r.install_deps"
     bl_label  = "Install Dependencies"
+
     gpu: BoolProperty(name="GPU (CUDA 12.1)", default=False)
 
     def execute(self, ctx):
         prefs = ctx.preferences.addons[ADDON_ID].preferences
 
-        cfg_dir    = Path(bpy.utils.user_resource('CONFIG'))
-        env_path   = cfg_dir / ENV_DIRNAME
-        env_path.mkdir(parents=True, exist_ok=True)
+        cfg_dir  = Path(bpy.utils.user_resource('CONFIG'))
+        env_dir = cfg_dir / ENV_DIRNAME
+        env_dir.mkdir(parents=True, exist_ok=True)
 
-        # 1 — create venv
-        py = get_venv_python(env_path)
+        # 1 — create venv if missing
+        py = get_venv_python(env_dir)
         if not py.exists():
-            self.report({'INFO'}, f"Creating virtual-env at {env_path}")
-            venv.create(env_path, with_pip=True, clear=False)
+            self.report({'INFO'}, f"Creating virtual‑env at {env_dir}")
+            venv.create(env_dir, with_pip=True, clear=False)
 
-        # 0 — unify build tools *without* breaking openxlab’s pin
+        # 0 — unify build tools
         subprocess.check_call([str(py), "-m", "pip", "install", "-U", "pip", "wheel"])
         subprocess.check_call([str(py), "-m", "pip", "install", "setuptools==60.2.0"])
 
         # 2 — pip wheels
         pkgs = [
             "openmim", "mmengine", "numpy", "scipy",
-
-            # We need pymo wheel; try source build without isolation
             "--no-build-isolation", "--no-binary=pymo", "pymo==0.2.0",
-
-            # chumpy fixes (some deps still pull this)
             "chumpy-fork==0.71",
             "--no-build-isolation", "chumpy==0.70",
-
             "mmpose==1.3.1",
         ]
 
         if self.gpu and platform.system() in {"Linux", "Windows"}:
             pkgs += [
                 "torch==2.3.0+cu121", "torchvision==0.18.0+cu121", "torchaudio==2.3.0+cu121",
-                "--extra-index-url", "https://download.pytorch.org/whl/cu121", "mmcv==2.0.1"
+                "--extra-index-url", "https://download.pytorch.org/whl/cu121", "mmcv==2.0.1",
             ]
         else:
             pkgs += ["torch==2.3.0", "torchvision==0.18.0", "torchaudio==2.3.0", "mmcv==2.0.1"]
@@ -133,7 +135,7 @@ class V2R_OT_InstallDeps(Operator):
             self.report({'ERROR'}, "pip install failed — see console")
             return {'CANCELLED'}
 
-        # 3 — clone repos if absent or not set
+        # 3 — clone repos if absent
         if not getattr(prefs, "mmpose_repo", ""):
             prefs.mmpose_repo = str(cfg_dir / "mmpose")
             subprocess.call(["git", "clone", "https://github.com/open-mmlab/mmpose", prefs.mmpose_repo])
@@ -142,12 +144,12 @@ class V2R_OT_InstallDeps(Operator):
             prefs.motionbert_repo = str(cfg_dir / "MotionBERT")
             subprocess.call(["git", "clone", "https://github.com/Walter0807/MotionBERT", prefs.motionbert_repo])
 
-        # 4 — download checkpoint
+        # 4 — download MotionBERT checkpoint
         ckpt = Path(prefs.motionbert_repo) / "checkpoints" / "mb_ft_h36m.bin"
         ckpt.parent.mkdir(parents=True, exist_ok=True)
         if not ckpt.exists():
             try:
-                self.report({'INFO'}, "Downloading MotionBERT weights (≈200 MB)…")
+                self.report({'INFO'}, "Downloading MotionBERT weights (≈200 MB)…")
                 urllib.request.urlretrieve(MB_CKPT_URL, ckpt)
             except Exception as e:
                 self.report({'WARNING'}, f"Could not download MotionBERT weights automatically: {e}")
@@ -156,7 +158,6 @@ class V2R_OT_InstallDeps(Operator):
         prefs.python_exe = str(py)
         self.report({'INFO'}, "Dependencies installed ✔")
         return {'FINISHED'}
-
 # ------------------------------------------------------------------
 #  External stub — multi-person
 # ------------------------------------------------------------------
