@@ -70,22 +70,30 @@ class V2R_Prefs(AddonPreferences):
     )
 
     # ----------------------------- UI -----------------------------
-    def draw(self, _ctx):
+    def draw(self, ctx):
         col = self.layout.column()
         col.label(text="Environment:")
         col.prop(self, "python_exe")
         col.prop(self, "mmpose_repo")
         col.prop(self, "motionbert_repo")
 
-        col.label(text="Install / Update:")
-        row = col.row()
-        # Two explicit buttons so users never have to open the redo pop‑over
-        row.operator("v2r.install_deps", text="Install Deps (CPU)", icon="CONSOLE").gpu = False
-        row.operator("v2r.install_deps", text="Install Deps (GPU)", icon="GPU").gpu = True
+        row = col.row(align=True)
+        # CPU wheels
+        op = row.operator("v2r.install_deps",
+                          text="Install Deps (CPU)",
+                          icon='CONSOLE')
+        op.gpu = False
+        # GPU wheels
+        op = row.operator("v2r.install_deps",
+                          text="Install Deps (GPU)",
+                          icon='SHADERFX')  # any valid icon you like
+        op.gpu = True
 
         col.separator()
         col.label(text="Maintenance", icon='TRASH')
-        col.operator("v2r.uninstall", text="Remove Video2Rigify Data", icon='TRASH')
+        col.operator("v2r.uninstall",
+                     text="Remove Video2Rigify Data",
+                     icon='TRASH')
 
 # ------------------------------------------------------------------
 #  Dependency-installer
@@ -145,14 +153,50 @@ class V2R_OT_InstallDeps(Operator):
             subprocess.call(["git", "clone", "https://github.com/Walter0807/MotionBERT", prefs.motionbert_repo])
 
         # 4 — download MotionBERT checkpoint
-        ckpt = Path(prefs.motionbert_repo) / "checkpoints" / "mb_ft_h36m.bin"
-        ckpt.parent.mkdir(parents=True, exist_ok=True)
-        if not ckpt.exists():
+
+        #   • First look for a bundled copy inside the add-on’s resources folder.
+        #   • If not shipped, fall back to Hugging Face / OneDrive download.
+        import importlib.resources as pkg_resources
+
+        ckpt_name  = "latest_epoch.bin"  # or "mb_lite.bin" if you prefer
+        ckpt_path  = Path(prefs.motionbert_repo) / "checkpoints" / ckpt_name
+        ckpt_path.parent.mkdir(parents=True, exist_ok=True)
+
+        if ckpt_path.exists():
+            self.report({'INFO'}, f"Checkpoint {ckpt_name} already present ✔")
+
+        else:
+            # ❶ try bundled resource
             try:
-                self.report({'INFO'}, "Downloading MotionBERT weights (≈200 MB)…")
-                urllib.request.urlretrieve(MB_CKPT_URL, ckpt)
-            except Exception as e:
-                self.report({'WARNING'}, f"Could not download MotionBERT weights automatically: {e}")
+                with pkg_resources.path(__package__, f"resources/{ckpt_name}") as p:
+                    if p.is_file():
+                        shutil.copy2(p, ckpt_path)
+                        self.report({'INFO'}, f"Bundled checkpoint copied → {ckpt_path}")
+            except FileNotFoundError:
+                pass
+
+            # ❷ if still missing, fall back to online download
+            if not ckpt_path.exists():
+                self.report({'INFO'}, "Bundled checkpoint not found → downloading …")
+                try:
+                    # OneDrive public link is token-free; keeps HF as second choice
+                    url = ("https://1drv.ms/u/s!AaaaBBBcccDDD?download=1"
+                        if use_onedrive else
+                        "https://huggingface.co/walter0807/MotionBERT/"
+                        f"resolve/main/{ckpt_name}")
+                    headers = {}
+                    token = os.getenv("HF_TOKEN")
+                    if "huggingface" in url and token:
+                        headers["Authorization"] = f"Bearer {token}"
+                    req = urllib.request.Request(url, headers=headers)
+                    with urllib.request.urlopen(req) as r, open(ckpt_path, "wb") as f:
+                        shutil.copyfileobj(r, f)
+                    self.report({'INFO'}, f"Downloaded {ckpt_name} ✔")
+                except Exception as e:
+                    self.report(
+                        {'WARNING'},
+                        f"Could not obtain checkpoint automatically: {e}\n"
+                        "→ place the file in MotionBERT/checkpoints/ manually.")
 
         # Save python path
         prefs.python_exe = str(py)
