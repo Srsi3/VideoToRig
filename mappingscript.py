@@ -144,8 +144,67 @@ class V2R_OT_InstallDeps(Operator):
 #  Pipeline stub  (unchanged placeholder)
 # ------------------------------------------------------------------
 PIPELINE_STUB = r"""#!/usr/bin/env python3
-# your existing stub content …
+import json, argparse, subprocess, tempfile, shutil, os, sys
+from pathlib import Path
+
+parser = argparse.ArgumentParser()
+parser.add_argument('video', type=Path)
+parser.add_argument('--outdir',     type=Path, required=True)
+parser.add_argument('--mmpose',     type=Path, required=True)
+parser.add_argument('--motionbert', type=Path, required=True)
+parser.add_argument('--device', default='cuda:0')
+args = parser.parse_args()
+
+work      = Path(tempfile.mkdtemp(prefix='v2r_'))
+pose_json = work / 'pose2d_all.json'
+
+# 1 ─ 2-D multi-person detection + tracking (MMPose)
+ret = subprocess.call([
+    sys.executable,
+    str(args.mmpose / 'tools/inferencer/video_demo.py'),
+    '--input',   str(args.video),
+    '--vis_out', str(pose_json),
+    '--tracking', '1',
+    '--det-cat-id', '0',
+    '--device',  args.device
+])
+if ret:
+    print('[V2R] video_demo.py failed', file=sys.stderr); sys.exit(ret)
+
+# 2 ─ split by track-id
+with pose_json.open('r', encoding='utf8') as f:
+    frames = json.load(f)
+
+tracks = {}
+for frm in frames:
+    for inst in frm.get('instances', []):
+        tid = inst.get('track_id', 0)
+        tracks.setdefault(tid, []).append({
+            'keypoints': inst.get('keypoints', []),
+            'frame_id':  frm.get('frame_id', 0)
+        })
+
+# 3 ─ run MotionBERT per track
+args.outdir.mkdir(parents=True, exist_ok=True)
+for tid, data in tracks.items():
+    tjson = work / f'track{tid}.json'
+    with tjson.open('w', encoding='utf8') as f:
+        json.dump(data, f)
+
+    out_bvh = args.outdir / f'track{tid}.bvh'
+    ret = subprocess.call([
+        sys.executable,
+        str(args.motionbert / 'apps/demo_pose3d.py'),
+        '--pose2d_json', str(tjson),
+        '--save_bvh',    str(out_bvh),
+        '--device',      args.device
+    ])
+    if ret:
+        print(f'[V2R] MotionBERT failed on track {tid}', file=sys.stderr)
+
+print('[V2R] BVHs ready in', args.outdir)
 """
+
 
 # ------------------------------------------------------------------
 #  Key-reducer helper (unchanged)
