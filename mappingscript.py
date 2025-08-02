@@ -265,6 +265,12 @@ class V2R_OT_Run(Operator):
             if addon_mod not in ctx.preferences.addons:
                 try: bpy.ops.preferences.addon_enable(module=addon_mod)
                 except Exception: pass
+            
+            import sys
+            ext_dir = Path(bpy.utils.resource_path('USER')) / 'extensions' / 'user_default'
+            mod_path = ext_dir / addon_mod
+            if mod_path.exists() and str(mod_path) not in sys.path:
+                sys.path.append(str(mod_path))
             try:
                 ar        = importlib.import_module(addon_mod)
                 has_ui    = hasattr(ar, "ui") and hasattr(ar.ui, "build_bone_list")
