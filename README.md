@@ -107,12 +107,9 @@ ruff check .
 * Improve MotionBERT ↔ Rigify bone‑map
 * UI polish & live progress bar
 * Remote / URL video inputs
+* Attempt to make it work with non rigify rigs
 
 Contributions & bug reports are welcome! Please open an issue or pull request.
-
-## License
-
-MIT © 2025 Samir Saldanha
 
 ## Credits
 
