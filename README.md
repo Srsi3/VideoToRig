@@ -4,6 +4,8 @@ A Blender 4.x add‑on that converts any **video of multiple people** into fully
 
 ## Key Features
 
+* STILL IN DEVELOPMENT - CURRENTLY HAS ISSUES WITH MMPOSE NOT WORKING PROPERLY
+
 * Supports **multiple people per video** with per‑track BVH export
 * Extreme‑aware keyframe reduction (smooths curves while preserving peaks)
 * Dependency installer in isolated virtual‑env keeps Blender Python clean
