@@ -103,7 +103,8 @@ class V2R_OT_InstallDeps(Operator):
             "openmim", "mmengine", "numpy", "scipy",
             "--no-build-isolation", "--no-binary=pymo", "pymo==0.2.0",
             "chumpy-fork==0.71", "--no-build-isolation", "chumpy==0.70",
-            "mmpose==1.3.1"
+            "mmpose==1.3.1",
+            "mmdet==3.3.0"
         ]
         if self.gpu and platform.system() in {"Linux", "Windows"}:
             base += ["torch==2.3.0+cu121", "torchvision==0.18.0+cu121",
@@ -144,7 +145,7 @@ class V2R_OT_InstallDeps(Operator):
 #  Pipeline stub  (unchanged placeholder)
 # ------------------------------------------------------------------
 PIPELINE_STUB = r"""#!/usr/bin/env python3
-import json, argparse, subprocess, tempfile, shutil, os, sys
+import json, argparse, subprocess, tempfile, shutil, sys, os
 from pathlib import Path
 
 parser = argparse.ArgumentParser()
@@ -155,41 +156,48 @@ parser.add_argument('--motionbert', type=Path, required=True)
 parser.add_argument('--device', default='cuda:0')
 args = parser.parse_args()
 
-work      = Path(tempfile.mkdtemp(prefix='v2r_'))
-pose_json = work / 'pose2d_all.json'
+work = Path(tempfile.mkdtemp(prefix='v2r_'))
 
-# 1 ─ 2-D multi-person detection + tracking (MMPose)
+# ------------------------------------------------------------------ #
+# 1 ─ 2-D multi-person tracking (new demo path)
+# ------------------------------------------------------------------ #
+demo_py = args.mmpose / 'demo' / 'topdown_demo_with_mmdet.py'
+if not demo_py.exists():
+    sys.exit('[V2R] demo script not found: ' + str(demo_py))
+
+# Minimal detector / pose configs shipped with MMPose for demos
+det_cfg  = args.mmpose / 'demo' / 'mmdetection_cfg' / 'faster_rcnn_r50_fpn_coco.py'
+det_ckpt = ('https://download.openmmlab.com/mmdetection/v3.0/'
+            'faster_rcnn/faster_rcnn_r50_fpn_1x_coco/'
+            'faster_rcnn_r50_fpn_1x_coco_20200130-047c8118.pth')
+
+pose_cfg  = args.mmpose / 'configs/body/2d_kpt_sview_rgb_img'
+pose_cfg /= 'topdown_heatmap/coco/rtmpose_m_8xb256-210e_coco-256x192.py'
+pose_ckpt = ('https://download.openmmlab.com/mmpose/v1/'
+             'rtmpose/rtmpose_m_8xb256-210e_coco-256x192-a24f2126_20230323.pth')
+
+pose_json = work / 'pose2d_all.json'
 ret = subprocess.call([
-    sys.executable,
-    str(args.mmpose / 'tools/inferencer/video_demo.py'),
-    '--input',   str(args.video),
-    '--vis_out', str(pose_json),
-    '--tracking', '1',
-    '--det-cat-id', '0',
-    '--device',  args.device
+    sys.executable, str(demo_py),
+    str(det_cfg), det_ckpt,
+    str(pose_cfg), pose_ckpt,
+    '--video-path', str(args.video),
+    '--out-json',   str(pose_json),
+    '--device',     args.device
 ])
 if ret:
-    print('[V2R] video_demo.py failed', file=sys.stderr); sys.exit(ret)
+    sys.exit('[V2R] pose-tracking demo failed')
 
-# 2 ─ split by track-id
+# ------------------------------------------------------------------ #
+# 2 ─ split by track-id & run MotionBERT
+# ------------------------------------------------------------------ #
 with pose_json.open('r', encoding='utf8') as f:
-    frames = json.load(f)
+    tracks = json.load(f)     # demo already outputs grouped tracks
 
-tracks = {}
-for frm in frames:
-    for inst in frm.get('instances', []):
-        tid = inst.get('track_id', 0)
-        tracks.setdefault(tid, []).append({
-            'keypoints': inst.get('keypoints', []),
-            'frame_id':  frm.get('frame_id', 0)
-        })
-
-# 3 ─ run MotionBERT per track
 args.outdir.mkdir(parents=True, exist_ok=True)
 for tid, data in tracks.items():
     tjson = work / f'track{tid}.json'
-    with tjson.open('w', encoding='utf8') as f:
-        json.dump(data, f)
+    with tjson.open('w', encoding='utf8') as f: json.dump(data, f)
 
     out_bvh = args.outdir / f'track{tid}.bvh'
     ret = subprocess.call([
