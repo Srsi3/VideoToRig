@@ -83,6 +83,9 @@ class V2R_Prefs(AddonPreferences):
 # ------------------------------------------------------------------
 #  Dependency-installer  (unchanged from your last file)
 # ------------------------------------------------------------------
+# ------------------------------------------------------------------
+#  Dependency-installer  –  NumPy-1.26 + pycocotools shim
+# ------------------------------------------------------------------
 class V2R_OT_InstallDeps(Operator):
     bl_idname = "v2r.install_deps"
     bl_label  = "Install Dependencies"
@@ -92,34 +95,67 @@ class V2R_OT_InstallDeps(Operator):
     def execute(self, ctx):
         prefs   = ctx.preferences.addons[ADDON_ID].preferences
         cfg_dir = Path(bpy.utils.user_resource('CONFIG'))
-        env_dir = cfg_dir / ENV_DIRNAME;  env_dir.mkdir(parents=True, exist_ok=True)
+        env_dir = cfg_dir / ENV_DIRNAME
+        env_dir.mkdir(parents=True, exist_ok=True)
 
+        # ---------------------------------------------------------- venv
         py = get_venv_python(env_dir)
         if not py.exists():
             self.report({'INFO'}, f"Creating virtual-env at {env_dir}")
             venv.create(env_dir, with_pip=True)
 
+        # ------------------------------------------------------ package list
         base = [
-            "openmim", "mmengine", "numpy", "scipy",
+            # ① hard-pin NumPy 1.x (avoids NumPy-2 ABI crash)
+            "numpy==1.26.4",
+            # main stack
+            "openmim", "mmengine", "scipy",
             "--no-build-isolation", "--no-binary=pymo", "pymo==0.2.0",
             "chumpy-fork==0.71", "--no-build-isolation", "chumpy==0.70",
             "mmpose==1.3.1",
-            "mmdet==3.3.0"
+            "mmdet==3.3.0",
+            # use official wheel instead of xtcocotools
+            "pycocotools==2.0.7",
         ]
         if self.gpu and platform.system() in {"Linux", "Windows"}:
-            base += ["torch==2.3.0+cu121", "torchvision==0.18.0+cu121",
-                     "torchaudio==2.3.0+cu121",
-                     "--extra-index-url", "https://download.pytorch.org/whl/cu121",
-                     "mmcv==2.0.1"]
+            base += [
+                "torch==2.3.0+cu121", "torchvision==0.18.0+cu121",
+                "torchaudio==2.3.0+cu121",
+                "--extra-index-url", "https://download.pytorch.org/whl/cu121",
+                "mmcv==2.0.1",
+            ]
         else:
             base += ["torch==2.3.0", "torchvision==0.18.0",
                      "torchaudio==2.3.0", "mmcv==2.0.1"]
 
+        # ---------------------------------------------------- bootstrap pip
         subprocess.check_call([str(py), "-m", "pip", "install", "-U",
                                "pip", "wheel", "setuptools==60.2.0"])
-        if subprocess.call([str(py), "-m", "pip", "install", "--upgrade", *base]):
-            self.report({'ERROR'}, "pip install failed"); return {'CANCELLED'}
 
+        # remove any previously built xtcocotools wheel (wrong ABI)
+        subprocess.call([str(py), "-m", "pip", "uninstall", "-y",
+                         "xtcocotools"])
+
+        # single install pass (NumPy first, rest afterwards)
+        if subprocess.call([str(py), "-m", "pip", "install", "--upgrade", *base]):
+            self.report({'ERROR'}, "pip install failed — see console")
+            return {'CANCELLED'}
+
+        # -------------------------------------------------- xtcocotools shim
+        # Make `import xtcocotools` resolve to pycocotools at runtime.
+        import json, textwrap, subprocess, sys
+        site_paths = json.loads(subprocess.check_output(
+            [str(py), "-c",
+             "import site, json; print(json.dumps(site.getsitepackages()))"],
+            text=True))
+        shim_code = textwrap.dedent("""\
+            import importlib, sys
+            sys.modules['xtcocotools'] = importlib.import_module('pycocotools')
+        """)
+        shim_path = Path(site_paths[0]) / "xtcocotools.py"
+        shim_path.write_text(shim_code, encoding="utf8")
+
+        # ---------------------------------------------------- clone repos
         if not getattr(prefs, "mmpose_repo", ""):
             prefs.mmpose_repo = str(cfg_dir / "mmpose")
             subprocess.call(["git", "clone",
@@ -131,12 +167,14 @@ class V2R_OT_InstallDeps(Operator):
                              "https://github.com/Walter0807/MotionBERT",
                              prefs.motionbert_repo])
 
+        # ------------------------------------------------ MotionBERT ckpt
         ckpt = Path(prefs.motionbert_repo) / "checkpoints" / "mb_ft_h36m.bin"
         ckpt.parent.mkdir(parents=True, exist_ok=True)
         if not ckpt.exists():
-            self.report({'WARNING'}, "MotionBERT checkpoint missing – "
-                                     "place mb_ft_h36m.bin in "
-                                     "MotionBERT/checkpoints/")
+            self.report({'WARNING'},
+                        "MotionBERT checkpoint missing – "
+                        "place mb_ft_h36m.bin in MotionBERT/checkpoints/")
+
         prefs.python_exe = str(py)
         self.report({'INFO'}, "Dependencies installed ✔")
         return {'FINISHED'}
