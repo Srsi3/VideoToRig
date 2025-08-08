@@ -143,7 +143,7 @@ class V2R_OT_InstallDeps(Operator):
 
         # -------------------------------------------------- xtcocotools shim
         # Make `import xtcocotools` resolve to pycocotools at runtime.
-        import json, textwrap, subprocess, sys
+        import json, textwrap, sys
         site_paths = json.loads(subprocess.check_output(
             [str(py), "-c",
              "import site, json; print(json.dumps(site.getsitepackages()))"],
@@ -191,7 +191,7 @@ parser.add_argument('video', type=Path)
 parser.add_argument('--outdir',     type=Path, required=True)
 parser.add_argument('--mmpose',     type=Path, required=True)
 parser.add_argument('--motionbert', type=Path, required=True)
-parser.add_argument('--device', default='cuda:0')
+parser.add_argument('--device', default='cpu')
 args = parser.parse_args()
 
 work = Path(tempfile.mkdtemp(prefix='v2r_'))
@@ -214,23 +214,71 @@ pose_cfg /= 'topdown_heatmap/coco/rtmpose_m_8xb256-210e_coco-256x192.py'
 pose_ckpt = ('https://download.openmmlab.com/mmpose/v1/'
              'rtmpose/rtmpose_m_8xb256-210e_coco-256x192-a24f2126_20230323.pth')
 
-pose_json = work / 'pose2d_all.json'
+out_dir = work / 'mmpose_out'
+out_dir.mkdir(parents=True, exist_ok=True)
+
 ret = subprocess.call([
     sys.executable, str(demo_py),
     str(det_cfg), det_ckpt,
     str(pose_cfg), pose_ckpt,
-    '--video-path', str(args.video),
-    '--out-json',   str(pose_json),
-    '--device',     args.device
+    '--video-path',     str(args.video),
+    '--out-video-root', str(out_dir),
+    '--save-predictions',
+    '--device',         args.device
 ])
 if ret:
-    sys.exit('[V2R] pose-tracking demo failed')
+    sys.exit('[V2R] pose demo failed')
 
-# ------------------------------------------------------------------ #
-# 2 ─ split by track-id & run MotionBERT
-# ------------------------------------------------------------------ #
-with pose_json.open('r', encoding='utf8') as f:
-    tracks = json.load(f)     # demo already outputs grouped tracks
+# Find predictions file (json/pkl/npz depending on version)
+pred_file = None
+for cand in out_dir.rglob('*'):
+    if cand.suffix.lower() in {'.json', '.pkl', '.npz'} and 'pred' in cand.stem.lower():
+        pred_file = cand; break
+if pred_file is None:
+    # fall back to any json in out_dir
+    for cand in out_dir.rglob('*.json'):
+        pred_file = cand; break
+if pred_file is None:
+    sys.exit('[V2R] could not find predictions output')
+
+# Normalize into a single-person "track0" (largest/strongest per frame)
+def _load_preds(p):
+    import numpy as _np, json as _json, pickle as _pkl
+    if p.suffix.lower() == '.json':
+        return _json.loads(p.read_text(encoding='utf8'))
+    if p.suffix.lower() == '.pkl':
+        with open(p, 'rb') as f: return _pkl.load(f)
+    if p.suffix.lower() == '.npz':
+        return _np.load(p, allow_pickle=True)
+    return None
+
+preds = _load_preds(pred_file)
+# Heuristic: expect a list/dict of frames each containing instances with keypoints.
+# We pick the best instance per frame to build "track0".
+track = []
+def _instances_in_frame(frame):
+    if isinstance(frame, dict):
+        return frame.get('pred_instances') or frame.get('instances') or frame.get('preds') or []
+    return []
+
+frames = preds if isinstance(preds, list) else preds.get('predictions', [])
+for fi, frm in enumerate(frames):
+    insts = _instances_in_frame(frm)
+    if not insts: 
+        continue
+    # unify structures
+    best = None; best_score = -1.0
+    for inst in insts:
+        kpts = inst.get('keypoints') or inst.get('keypoints_2d') or inst.get('coordinates')
+        if kpts is None: 
+            continue
+        score = (inst.get('bbox_score') or inst.get('score') or 0.0)
+        if score > best_score:
+            best = kpts; best_score = score
+    if best is not None:
+        track.append({'frame_id': fi, 'keypoints': best})
+
+tracks = {'0': track}   # MotionBERT will get one BVH for now
 
 args.outdir.mkdir(parents=True, exist_ok=True)
 for tid, data in tracks.items():
@@ -313,15 +361,15 @@ class V2R_OT_Run(Operator):
                 except Exception: pass
             
             import sys
-            ext_dir = Path(bpy.utils.resource_path('USER')) / 'extensions' / 'user_default'
-            mod_path = ext_dir / addon_mod
-            if mod_path.exists() and str(mod_path) not in sys.path:
-                sys.path.append(str(mod_path))
+            ext_root = Path(bpy.utils.resource_path('USER')) / 'extensions' / 'user_default'
+            if ext_root.exists() and str(ext_root) not in sys.path:
+                sys.path.append(str(ext_root))
             try:
-                ar        = importlib.import_module(addon_mod)
-                has_ui    = hasattr(ar, "ui") and hasattr(ar.ui, "build_bone_list")
-            except ModuleNotFoundError:
+                ar     = importlib.import_module('animation_retargeting')
+                has_ui = hasattr(ar, "ui") and hasattr(ar.ui, "build_bone_list")
+            except Exception:
                 ar = None; has_ui = False
+
 
             if not has_ui:
                 self.report({'WARNING'}, "Animation-Retargeting add-on missing "
