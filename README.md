@@ -109,8 +109,6 @@ ruff check .
 * Remote / URL video inputs
 * Attempt to make it work with non rigify rigs
 
-Contributions & bug reports are welcome! Please open an issue or pull request.
-
 ## Credits
 
 * **OpenMMLab** - MMPose
