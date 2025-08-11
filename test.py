@@ -1,4 +1,3 @@
-import os
 import cv2
 import json
 import numpy as np
@@ -44,7 +43,7 @@ frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
 
 all_person_tracks = {}  # {person_id: [[x,y,conf]*17]*T}
 
-print("🧠 Step 1: Estimating 2D poses...")
+print("Step 1: Estimating 2D poses...")
 for frame_idx in tqdm(range(frame_count)):
     ret, frame = cap.read()
     if not ret:
@@ -96,5 +95,5 @@ for pid, kps2d_seq in all_person_tracks.items():
 with open(output_json, 'w') as f:
     json.dump(output_3d, f, indent=2)
 
-print(f"✅ Done. Saved 3D poses to: {output_json}")
+print(f"Saved 3D poses to: {output_json}")
 
