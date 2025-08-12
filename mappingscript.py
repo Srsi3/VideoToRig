@@ -7,7 +7,7 @@ from __future__ import annotations
 bl_info = {
     "name":        "Multi-Person Video-2-Rigify",
     "author":      "Samir Saldanha",
-    "version":     (0, 5, 0),
+    "version":     (0, 5, 1),
     "blender":     (4, 0, 0),
     "location":    "View3D ▸ Sidebar ▸ Video 2 Rigify",
     "description": "Video → MMPose → MotionBERT → Rigify (multi-person)",
@@ -17,7 +17,7 @@ bl_info = {
 # ------------------------------------------------------------------
 #  Imports
 # ------------------------------------------------------------------
-import bpy, os, sys, shutil, subprocess, tempfile, platform, venv, logging, importlib, importlib.util
+import bpy, os, sys, shutil, subprocess, tempfile, platform, venv, logging, importlib, importlib.util, json
 from pathlib import Path
 from bpy.types   import AddonPreferences, Operator, Panel, PropertyGroup
 from bpy.props   import (StringProperty, BoolProperty, IntProperty,
@@ -191,7 +191,7 @@ class V2R_OT_InstallDeps(Operator):
             self.report({'ERROR'}, f"Base deps install failed: {e}")
             return {'CANCELLED'}
 
-                # ---------- mmcv/mmdet/mmpose via mim (pin correct wheel index) ----------
+        # ---------- mmcv/mmdet/mmpose via mim (pin correct wheel index) ----------
         try:
             run_cmd([str(py), "-m", "pip", "uninstall", "-y", "mmcv", "mmcv-lite"], desc="uninstall mmcv/mmcv-lite")
             run_cmd([str(py), "-m", "pip", "install", "-U", "openmim"], desc="ensure openmim")
@@ -209,16 +209,22 @@ class V2R_OT_InstallDeps(Operator):
             self.report({'ERROR'}, f"MIM install failed: {e}")
             return {'CANCELLED'}
 
+        # ---------- clone repos if absent or missing ----------
+        try:
+            if not getattr(prefs, "mmpose_repo", "") or not Path(prefs.mmpose_repo).exists():
+                prefs.mmpose_repo = str(cfg_dir / "mmpose")
+            if not Path(prefs.mmpose_repo).exists():
+                run_cmd(["git", "clone", "https://github.com/open-mmlab/mmpose", prefs.mmpose_repo],
+                        desc="clone mmpose")
 
-        # ---------- clone repos if absent ----------
-        if not getattr(prefs, "mmpose_repo", ""):
-            prefs.mmpose_repo = str(cfg_dir / "mmpose")
-            run_cmd(["git", "clone", "https://github.com/open-mmlab/mmpose", prefs.mmpose_repo],
-                    desc="clone mmpose")
-        if not getattr(prefs, "motionbert_repo", ""):
-            prefs.motionbert_repo = str(cfg_dir / "MotionBERT")
-            run_cmd(["git", "clone", "https://github.com/Walter0807/MotionBERT",
-                     prefs.motionbert_repo], desc="clone MotionBERT")
+            if not getattr(prefs, "motionbert_repo", "") or not Path(prefs.motionbert_repo).exists():
+                prefs.motionbert_repo = str(cfg_dir / "MotionBERT")
+            if not Path(prefs.motionbert_repo).exists():
+                run_cmd(["git", "clone", "https://github.com/Walter0807/MotionBERT",
+                         prefs.motionbert_repo], desc="clone MotionBERT")
+        except Exception as e:
+            self.report({'ERROR'}, f"Git clone failed: {e}")
+            return {'CANCELLED'}
 
         # ---------- MotionBERT checkpoint copy ----------
         ckpt_dir = Path(prefs.motionbert_repo) / "checkpoints"
@@ -266,7 +272,7 @@ class V2R_OT_InstallDeps(Operator):
         return {'FINISHED'}
 
 # ------------------------------------------------------------------
-#  Pipeline stub  –  robust, logs, COCO→H36M mapping, ≤243-frame chunks
+#  Pipeline stub  – multi-person, tracks + ≤243-frame chunks per track
 # ------------------------------------------------------------------
 PIPELINE_STUB = r"""#!/usr/bin/env python3
 import json, argparse, subprocess, tempfile, shutil, sys, os, math, logging
@@ -347,23 +353,25 @@ def _load_preds(p):
     return None
 preds = _load_preds(pred_file)
 
-# --- frame iterator
+# --- helpers
+import numpy as np
+
 def _frame_instances(frame):
     if isinstance(frame, dict):
         return frame.get('pred_instances') or frame.get('instances') or frame.get('preds') or []
     return []
 
-frames = preds if isinstance(preds, list) else preds.get('predictions', [])
-if not isinstance(frames, list) or not frames:
-    sys.exit('[V2R] predictions structure unrecognized or empty')
+def _inst_center(inst):
+    kpts = inst.get('keypoints') or inst.get('keypoints_2d') or inst.get('coordinates')
+    if kpts is None: return None
+    k = np.asarray(kpts).reshape(-1,3)
+    valid = k[k[:,2] > 0]
+    if len(valid) == 0:
+        valid = k
+    return valid[:,:2].mean(axis=0)
 
-# --- COCO(17) → H36M(17) mapping (approximate: derive pelvis/thorax/neck/head)
-# COCO idx: 0 nose,1 leye,2 reye,3 lear,4 rear,5 lsh,6 rsh,7 leb,8 reb,9 lw,10 rw,11 lhip,12 rhip,13 lk,14 rk,15 la,16 ra
-# H36M order we output:
-# 0 pelvis,1 lhip,2 lknee,3 lankle,4 rhip,5 rknee,6 rankle,7 spine,8 thorax,9 neck,10 head,11 lsh,12 leb,13 lw,14 rsh,15 reb,16 rw
 def coco_to_h36m(kpts):
-    import numpy as _np
-    kp = _np.asarray(kpts).reshape(-1, 3)  # 17x3
+    kp = np.asarray(kpts).reshape(-1, 3)  # 17x3
     def mid(a,b): return (kp[a,:2] + kp[b,:2]) / 2.0
     def conf(a,b): return (kp[a,2] + kp[b,2]) / 2.0
     pelvis_xy = mid(11,12); pelvis_c = conf(11,12)
@@ -371,81 +379,110 @@ def coco_to_h36m(kpts):
     neck_xy   = mid(1,2);   neck_c   = conf(1,2)
     head_xy   = kp[0,:2];   head_c   = kp[0,2]
     spine_xy  = (pelvis_xy + thorax_xy) / 2.0; spine_c = (pelvis_c + thorax_c)/2.0
-    out = _np.zeros((17,3), dtype=_np.float32)
-    # 0 pelvis
+    out = np.zeros((17,3), dtype=np.float32)
     out[0,:2]=pelvis_xy; out[0,2]=pelvis_c
-    # 1-3 left leg
     out[1],out[2],out[3] = kp[11], kp[13], kp[15]
-    # 4-6 right leg
     out[4],out[5],out[6] = kp[12], kp[14], kp[16]
-    # 7 spine, 8 thorax, 9 neck, 10 head
     out[7,:2]=spine_xy;  out[7,2]=spine_c
     out[8,:2]=thorax_xy; out[8,2]=thorax_c
     out[9,:2]=neck_xy;   out[9,2]=neck_c
     out[10,:2]=head_xy;  out[10,2]=head_c
-    # 11-13 left arm
     out[11],out[12],out[13] = kp[5], kp[7], kp[9]
-    # 14-16 right arm
     out[14],out[15],out[16] = kp[6], kp[8], kp[10]
     return out
 
-# --- build a simple single track (best instance per frame)
-track = []
+# --- collect frames
+frames = preds if isinstance(preds, list) else preds.get('predictions', [])
+if not isinstance(frames, list) or not frames:
+    sys.exit('[V2R] predictions structure unrecognized or empty')
+
+# --- simple multi-person tracking (nearest-center, 1-frame memory)
+tracks = []           # each: { 'id': int, 'last_center': np.array([x,y]), 'last_frame': int, 'items': [ {frame_id, keypoints} ] }
+next_tid = 0
+max_dist = 80.0       # px threshold for matching
 for fi, frm in enumerate(frames):
     insts = _frame_instances(frm)
-    if not insts: 
-        continue
-    best, best_score = None, -1.0
+    cur = []
     for inst in insts:
         kpts = inst.get('keypoints') or inst.get('keypoints_2d') or inst.get('coordinates')
-        if kpts is None: 
-            continue
+        if kpts is None: continue
+        center = _inst_center(inst)
         score = float(inst.get('bbox_score') or inst.get('score') or 0.0)
-        if score > best_score:
-            best, best_score = kpts, score
-    if best is None:
-        continue
-    # map to H36M format
-    h36m = coco_to_h36m(best).tolist()
-    track.append({'frame_id': fi, 'keypoints': h36m})
+        cur.append((kpts, center, score))
 
-# --- chunk to <=243 frames and write chunk JSONs
+    # try match to existing (only those updated at fi-1)
+    used = set()
+    for ti, tr in enumerate(tracks):
+        if tr['last_frame'] != fi-1:
+            continue
+        best_j, best_d = None, 1e9
+        for j,(kpts, center, score) in enumerate(cur):
+            if j in used or center is None or tr['last_center'] is None:
+                continue
+            d = float(np.linalg.norm(center - tr['last_center']))
+            if d < best_d:
+                best_d, best_j = d, j
+        if best_j is not None and best_d <= max_dist:
+            kpts, center, score = cur[best_j]
+            used.add(best_j)
+            h36m = coco_to_h36m(kpts).tolist()
+            tr['items'].append({'frame_id': fi, 'keypoints': h36m})
+            tr['last_center'] = center
+            tr['last_frame']  = fi
+
+    # spawn new tracks for unmatched
+    for j,(kpts, center, score) in enumerate(cur):
+        if j in used:
+            continue
+        h36m = coco_to_h36m(kpts).tolist()
+        tracks.append({'id': next_tid, 'last_center': center, 'last_frame': fi, 'items': [{'frame_id': fi, 'keypoints': h36m}]})
+        next_tid += 1
+
+# drop very short tracks
+tracks = [t for t in tracks if len(t['items']) >= 8]
+
 args.outdir.mkdir(parents=True, exist_ok=True)
-chunk_paths = []
-if not track:
-    sys.exit('[V2R] empty track predictions')
 
-num_chunks = math.ceil(len(track) / MB_FRAME_CAP)
-for ci in range(num_chunks):
-    start = ci * MB_FRAME_CAP
-    end   = min((ci+1)*MB_FRAME_CAP, len(track))
-    chunk = track[start:end]
-    tjson = work / f'track0_part{ci:03d}.json'
-    with tjson.open('w', encoding='utf8') as f: json.dump(chunk, f)
-    chunk_paths.append((tjson, start, end))
+# --- run MotionBERT per track in chunks
+all_track_outputs = []
+mb_env = dict(os.environ)
+# Help MotionBERT resolve local imports
+mb_env['PYTHONPATH'] = os.pathsep.join([str(args.motionbert), mb_env.get('PYTHONPATH','')])
 
-# --- run MotionBERT per chunk
-bvh_paths = []
-for (tjson, start, end) in chunk_paths:
-    out_bvh = args.outdir / f'track0_part{start:06d}_{end:06d}.bvh'
-    cmd = [
-        sys.executable,
-        str(args.motionbert / 'apps/demo_pose3d.py'),
-        '--pose2d_json', str(tjson),
-        '--save_bvh',    str(out_bvh),
-        '--device',      args.device
-    ]
-    log.info("Run MotionBERT: %s", " ".join(map(str, cmd)))
-    proc = subprocess.run(cmd, capture_output=True, text=True)
-    if proc.stdout: log.info(proc.stdout)
-    if proc.stderr: log.warning(proc.stderr)
-    if proc.returncode:
-        log.error("MotionBERT failed on %s", tjson)
+for tr in tracks:
+    items = tr['items']
+    items.sort(key=lambda x: x['frame_id'])
+    bvh_paths = []
+    if not items:
         continue
-    bvh_paths.append((out_bvh, start, end))
 
-# output: multiple BVHs, Blender will stitch with offsets
-print(json.dumps({"bvh_parts": [str(p[0]) for p in bvh_paths]}))
+    num_chunks = math.ceil(len(items) / MB_FRAME_CAP)
+    for ci in range(num_chunks):
+        start = ci * MB_FRAME_CAP
+        end   = min((ci+1)*MB_FRAME_CAP, len(items))
+        chunk = items[start:end]
+        tjson = work / f'track{tr['id']}_part{ci:03d}.json'
+        with tjson.open('w', encoding='utf8') as f: json.dump(chunk, f)
+        out_bvh = args.outdir / f'track{tr['id']}_part{start:06d}_{end:06d}.bvh'
+        cmd = [
+            sys.executable,
+            str(args.motionbert / 'apps/demo_pose3d.py'),
+            '--pose2d_json', str(tjson),
+            '--save_bvh',    str(out_bvh),
+            '--device',      args.device
+        ]
+        log.info("Run MotionBERT: %s", " ".join(map(str, cmd)))
+        proc = subprocess.run(cmd, capture_output=True, text=True, env=mb_env, cwd=str(args.motionbert))
+        if proc.stdout: log.info(proc.stdout)
+        if proc.stderr: log.warning(proc.stderr)
+        if proc.returncode:
+            log.error("MotionBERT failed on %s", tjson)
+            continue
+        bvh_paths.append(str(out_bvh))
+    if bvh_paths:
+        all_track_outputs.append({'id': tr['id'], 'parts': bvh_paths})
+
+print(json.dumps({"tracks": all_track_outputs}))
 """
 
 # ------------------------------------------------------------------
@@ -475,7 +512,7 @@ def reduce_keys_extremes(action, err=0.02, inter_keep=10):
         for i in reversed(range(1, len(kps)-1)):
             if i in keep:
                 continue
-            y_pred = np.interp(kps[i].co.x, xs[list(sorted(keep))], ys[list(sorted(keep))])
+            y_pred = np.interp(kps[i].co.x, [xs[k] for k in sorted(keep)], [ys[k] for k in sorted(keep)])
             if abs(y_pred - ys[i]) < err:
                 kps.remove(kps[i])
 
@@ -518,10 +555,10 @@ class V2R_OT_Run(Operator):
             stub_py = Path(tmp) / "pipeline_stub.py"
             stub_py.write_text(PIPELINE_STUB, encoding='utf8'); stub_py.chmod(0o755)
 
-            cmd = [prefs.python_exe, stub_py, video,
-                   '--outdir', outdir,
-                   '--mmpose', prefs.mmpose_repo,
-                   '--motionbert', prefs.motionbert_repo,
+            cmd = [prefs.python_exe, str(stub_py), str(video),
+                   '--outdir', str(outdir),
+                   '--mmpose', str(prefs.mmpose_repo),
+                   '--motionbert', str(prefs.motionbert_repo),
                    '--device', device]
             self.report({'INFO'}, "Running external pose pipeline…")
             log.info("Run pipeline stub: %s", " ".join(map(str, cmd)))
@@ -532,16 +569,19 @@ class V2R_OT_Run(Operator):
                 self.report({'ERROR'}, "External pipeline failed")
                 return {'CANCELLED'}
 
-            # Parse JSON list of BVH parts from stub's stdout (last line)
-            bvh_parts = []
+            # Parse JSON of BVH parts from stub's stdout (support old/new schema)
+            tracks = []  # list of { 'id': int, 'parts': [path, ...] }
             for line in proc.stdout.splitlines():
                 try:
                     obj = json.loads(line)
-                    if "bvh_parts" in obj:
-                        bvh_parts = [Path(p) for p in obj["bvh_parts"]]
+                    if isinstance(obj, dict):
+                        if 'tracks' in obj:
+                            tracks = obj['tracks']
+                        elif 'bvh_parts' in obj:
+                            tracks = [{'id': 0, 'parts': obj['bvh_parts']}]
                 except Exception:
                     continue
-            if not bvh_parts:
+            if not tracks:
                 msg = "No BVH files produced by MotionBERT"
                 self.report({'ERROR'}, msg); log.error(msg)
                 return {'CANCELLED'}
@@ -559,7 +599,6 @@ class V2R_OT_Run(Operator):
                 try: bpy.ops.preferences.addon_enable(module=addon_mod)
                 except Exception: pass
 
-            # Try to import from extensions path if not importable
             try:
                 ar = importlib.import_module('animation_retargeting')
                 has_ui = hasattr(ar, "ui") and hasattr(ar.ui, "build_bone_list")
@@ -570,74 +609,102 @@ class V2R_OT_Run(Operator):
             coll = (target_orig.users_collection[0]
                     if target_orig.users_collection else ctx.scene.collection)
 
-            # We import multiple parts and offset their keyframes sequentially
-            start_frame = ctx.scene.frame_start
-            cur_offset  = 0
+            start_frame_global = ctx.scene.frame_start
+            scene_end = start_frame_global
 
-            for idx, bvh in enumerate(sorted(bvh_parts)):
-                log.info("Import BVH: %s", bvh)
-                bpy.ops.import_anim.bvh(filepath=str(bvh),
-                                        axis_forward='-Z', axis_up='Y')
-                if not ctx.selected_objects:
-                    self.report({'ERROR'}, "BVH import failed"); log.error("BVH import yielded no selection")
-                    return {'CANCELLED'}
-                source_arm = ctx.selected_objects[0]
-
-                # Compute duration from the source action for offset
-                src_action = source_arm.animation_data.action if source_arm.animation_data else None
-                if src_action:
-                    src_len = int(src_action.frame_range[1] - src_action.frame_range[0]) + 1
-                else:
-                    src_len = 0
-
+            for t_idx, tr in enumerate(sorted(tracks, key=lambda t: t.get('id', 0))):
                 # Create/choose target armature
-                if idx == 0 or not s.duplicate_rigs:
+                if t_idx == 0 or not s.duplicate_rigs:
                     target = target_orig
                 else:
                     target = target_orig.copy()
                     target.data = target_orig.data.copy()
-                    target.name = f"{s.rig_name}_{idx+1}"
+                    target.animation_data_clear()
+                    target.name = f"{s.rig_name}_{t_idx+1}"
                     coll.objects.link(target)
 
-                # Retarget
-                if has_ui:
+                cur_offset = 0
+                for part_path in tr.get('parts', []):
+                    bvh = Path(part_path)
+                    if not bvh.exists():
+                        log.error("Missing BVH part: %s", bvh)
+                        continue
+
+                    log.info("Import BVH: %s", bvh)
+                    # Import BVH -> creates a new armature with action
                     try:
-                        ar.ui.build_bone_list(source_arm, target)
-                        ar.ui.retarget(target)
-                    except Exception as e:
-                        log.error("Animation-Retargeting error: %s", e)
-                        # fallback
-                        has_ui = False
+                        bpy.ops.object.select_all(action='DESELECT')
+                    except Exception:
+                        pass
+                    bpy.ops.import_anim.bvh(filepath=str(bvh), axis_forward='-Z', axis_up='Y')
 
-                if not has_ui:
-                    # naive world-space copy (slow but safe)
-                    fr_start = start_frame + cur_offset
-                    fr_end   = fr_start + src_len
-                    for f in range(fr_start, fr_end, s.bake_step):
-                        bpy.context.scene.frame_set(f)
-                        for b_t, b_s in zip(target.pose.bones, source_arm.pose.bones):
-                            b_t.matrix = b_s.matrix
+                    # pick the imported armature (selected & type ARMATURE)
+                    source_arm = None
+                    for o in bpy.context.selected_objects:
+                        if o.type == 'ARMATURE':
+                            source_arm = o; break
+                    if source_arm is None:
+                        self.report({'ERROR'}, "BVH import failed")
+                        log.error("BVH import yielded no armature selection")
+                        return {'CANCELLED'}
 
-                # Bake to keyframes
-                fr_start = start_frame + cur_offset
-                fr_end   = fr_start + src_len
-                bpy.ops.nla.bake(frame_start=fr_start,
-                                 frame_end=fr_end if src_len else ctx.scene.frame_end,
-                                 step=s.bake_step,
-                                 visual_keying=True,
-                                 clear_constraints=True,
-                                 use_current_action=True,
-                                 bake_types={'POSE'})
+                    src_action = source_arm.animation_data.action if source_arm.animation_data else None
+                    src_len = int(src_action.frame_range[1] - src_action.frame_range[0]) + 1 if src_action else 0
 
-                # Key reduction
+                    # Retarget
+                    if has_ui:
+                        try:
+                            ar.ui.build_bone_list(source_arm, target)
+                            ar.ui.retarget(target)
+                        except Exception as e:
+                            log.error("Animation-Retargeting error: %s", e)
+                            has_ui = False
+
+                    if not has_ui:
+                        # naive per-frame paste of world matrices
+                        fr_start = start_frame_global + cur_offset
+                        fr_end   = fr_start + max(src_len, 0)
+                        for f in range(fr_start, fr_end, max(1, s.bake_step)):
+                            ctx.scene.frame_set(f)
+                            # best-effort name-based mapping
+                            for b_s in source_arm.pose.bones:
+                                b_t = target.pose.bones.get(b_s.name)
+                                if b_t is not None:
+                                    b_t.matrix = b_s.matrix
+
+                    # Bake to keyframes on target
+                    fr_start = start_frame_global + cur_offset
+                    fr_end   = fr_start + (src_len if src_len else ctx.scene.frame_end - fr_start)
+                    bpy.ops.nla.bake(frame_start=fr_start,
+                                     frame_end=fr_end,
+                                     step=max(1, s.bake_step),
+                                     visual_keying=True,
+                                     clear_constraints=True,
+                                     use_current_action=True,
+                                     bake_types={'POSE'})
+
+                    # Clean up source armature to avoid clutter
+                    try:
+                        bpy.data.objects.remove(source_arm, do_unlink=True)
+                    except Exception:
+                        pass
+
+                    # next chunk starts after this
+                    cur_offset += max(src_len, 0)
+                    scene_end = max(scene_end, start_frame_global + cur_offset)
+
+                # Key reduction per track (on the last baked action)
                 if target.animation_data and target.animation_data.action:
                     try:
                         reduce_keys_extremes(target.animation_data.action, err=s.err_tol, inter_keep=10)
                     except Exception as e:
                         log.error("Key reduction failed: %s", e)
 
-                # offset for next chunk
-                cur_offset += src_len
+            # Expand scene end to fit all baked keys
+            try:
+                ctx.scene.frame_end = max(ctx.scene.frame_end, scene_end)
+            except Exception:
+                pass
 
         self.report({'INFO'}, "Retarget finished ✔ (see log for details)")
         log.info("Retarget finished ✔")
