@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
-# ------------------------------------------------------------------
+
 #  Multi-Person Video-2-Rigify  –  one-click ML pipeline for Blender
-# ------------------------------------------------------------------
 from __future__ import annotations
 
 bl_info = {
@@ -14,27 +13,23 @@ bl_info = {
     "category":    "Animation",
 }
 
-# ------------------------------------------------------------------
 #  Imports
-# ------------------------------------------------------------------
 import bpy, os, sys, shutil, subprocess, tempfile, platform, venv, logging, importlib, importlib.util, json
 from pathlib import Path
 from bpy.types   import AddonPreferences, Operator, Panel, PropertyGroup
 from bpy.props   import (StringProperty, BoolProperty, IntProperty,
                          FloatProperty, PointerProperty)
 
-# ------------------------------------------------------------------
+
 #  Constants
-# ------------------------------------------------------------------
 ADDON_ID      = __package__ or __name__
 REQ_MODULES   = ("torch", "mmcv", "mmpose", "numpy")
 ENV_DIRNAME   = "video2rigify_env"
 LOG_NAME      = "video2rigify.log"
 MB_FRAME_CAP  = 243  # motionbert hard cap
 
-# ------------------------------------------------------------------
+
 #  Logging
-# ------------------------------------------------------------------
 def get_logger() -> logging.Logger:
     """Log to both Blender console and to a file in the Blender config dir."""
     logger = logging.getLogger("Video2Rigify")
@@ -61,9 +56,8 @@ def get_logger() -> logging.Logger:
 
 log = get_logger()
 
-# ------------------------------------------------------------------
+
 #  Helpers
-# ------------------------------------------------------------------
 def missing_modules():
     return [m for m in REQ_MODULES if importlib.util.find_spec(m) is None]
 
@@ -89,9 +83,8 @@ def run_cmd(args, cwd=None, env=None, desc=""):
         raise RuntimeError(msg)
     return proc
 
-# ------------------------------------------------------------------
+
 #  Scene-level settings
-# ------------------------------------------------------------------
 class V2R_Props(PropertyGroup):
     video_path: StringProperty(name="Video", subtype='FILE_PATH')
     rig_name:   StringProperty(name="Rigify Armature", default="rig")
@@ -100,9 +93,8 @@ class V2R_Props(PropertyGroup):
                               min=0.0, soft_max=0.1)
     duplicate_rigs: BoolProperty(name="Duplicate Rig per Person", default=True)
 
-# ------------------------------------------------------------------
+
 #  Preferences
-# ------------------------------------------------------------------
 class V2R_Prefs(AddonPreferences):
     bl_idname = ADDON_ID
     python_exe:      StringProperty(name="External Python", subtype='FILE_PATH')
@@ -127,9 +119,7 @@ class V2R_Prefs(AddonPreferences):
         col.operator("v2r.uninstall", text="Remove Video2Rigify Data",
                      icon='TRASH')
 
-# ------------------------------------------------------------------
 #  Dependency-installer  –  robust (OpenMIM, NumPy pin, checkpoint copy)
-# ------------------------------------------------------------------
 class V2R_OT_InstallDeps(Operator):
     bl_idname = "v2r.install_deps"
     bl_label  = "Install Dependencies"
@@ -271,9 +261,8 @@ class V2R_OT_InstallDeps(Operator):
         log.info("Dependencies installed ✔")
         return {'FINISHED'}
 
-# ------------------------------------------------------------------
+
 #  Pipeline stub  – multi-person, tracks + ≤243-frame chunks per track
-# ------------------------------------------------------------------
 PIPELINE_STUB = r"""#!/usr/bin/env python3
 import json, argparse, subprocess, tempfile, shutil, sys, os, math, logging
 from pathlib import Path
@@ -485,9 +474,8 @@ for tr in tracks:
 print(json.dumps({"tracks": all_track_outputs}))
 """
 
-# ------------------------------------------------------------------
+
 #  Key-reducer helper – extremes + in-between keepers
-# ------------------------------------------------------------------
 def reduce_keys_extremes(action, err=0.02, inter_keep=10):
     """
     Keep:
@@ -516,9 +504,8 @@ def reduce_keys_extremes(action, err=0.02, inter_keep=10):
             if abs(y_pred - ys[i]) < err:
                 kps.remove(kps[i])
 
-# ------------------------------------------------------------------
+
 #  Main operator
-# ------------------------------------------------------------------
 class V2R_OT_Run(Operator):
     bl_idname = "v2r.run_pipeline"
     bl_label  = "Run Video → Rigify"
@@ -710,9 +697,8 @@ class V2R_OT_Run(Operator):
         log.info("Retarget finished ✔")
         return {'FINISHED'}
 
-# ------------------------------------------------------------------
+
 #  UI panel
-# ------------------------------------------------------------------
 class V2R_PT_Panel(Panel):
     bl_idname      = "V2R_PT_panel"
     bl_label       = "Video → Rigify"
@@ -732,9 +718,8 @@ class V2R_PT_Panel(Panel):
         col.separator()
         col.label(text="Install / Update deps in Add-on Prefs →")
 
-# ------------------------------------------------------------------
+
 #  Un-installer
-# ------------------------------------------------------------------
 class V2R_OT_Uninstall(Operator):
     bl_idname = "v2r.uninstall"
     bl_label  = "Remove Video2Rigify Data"
@@ -761,9 +746,8 @@ class V2R_OT_Uninstall(Operator):
         self.report({'INFO'}, "Video2Rigify data removed – disable add-on to finish")
         return {'FINISHED'}
 
-# ------------------------------------------------------------------
 #  Registration
-# ------------------------------------------------------------------
+
 classes = (
     V2R_Props, V2R_Prefs, V2R_OT_InstallDeps, V2R_OT_Run,
     V2R_OT_Uninstall, V2R_PT_Panel

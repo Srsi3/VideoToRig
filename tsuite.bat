@@ -2,7 +2,7 @@
 setlocal EnableExtensions EnableDelayedExpansion
 
 echo ======================================================
-echo   Video2Rigify Outside‑Blender Test Runner (Windows)
+echo   Video2Rigify Outside-Blender Test Runner (Windows)
 echo ======================================================
 
 REM --- Locate Blender config root ---

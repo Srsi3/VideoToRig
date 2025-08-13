@@ -1,19 +1,19 @@
 #!/usr/bin/env python3
 """
-Video2Rigify – Outside‑Blender Test Suite
+Video2Rigify - Outside-Blender Test Suite
 =========================================
 
 Purpose
 -------
-A fast, self‑contained test runner for the Multi‑Person Video‑2‑Rigify
+A fast, self-contained test runner for the Multi-Person Video-2-Rigify
 pipeline that you can run *without* Blender. It validates:
 
 1) Environment & versions (torch/mmcv/mmdet/mmpose)
 2) MMPose demo on an image (produces predictions)
 3) MotionBERT on a synthetic H36M track (produces BVH)
-4) (Optional) End‑to‑end: video → MMPose → MotionBERT (tiny clip)
+4) (Optional) End-to-end: video → MMPose → MotionBERT (tiny clip)
 
-It writes rich logs and returns non‑zero on failure. Designed for quick
+It writes rich logs and returns non-zero on failure. Designed for quick
 smoke testing and debugging.
 
 Usage
@@ -27,14 +27,14 @@ python v2r_test_suite.py \
 Flags
 -----
 --quick            Run a minimal but useful subset (1,2,3 + tiny E2E if --video given)
---skip-e2e         Skip the end‑to‑end test even if --video is provided
+--skip-e2e         Skip the end-to-end test even if --video is provided
 --device {cpu,cuda:0,auto}  Default: auto (detect via torch)
 --framecap N       Hard cap on frames per track for E2E (default 120)
 --workdir DIR      Where to write outputs/logs (default: system temp)
 
 Notes
 -----
-• Requires that you already installed deps via the Blender add‑on (or equivalent).
+• Requires that you already installed deps via the Blender add-on (or equivalent).
 • If ffmpeg is available on PATH, the suite will downsample the provided video to 5fps/shorter cut.
 • No network fetches except when MMPose pulls model weights on first run.
 """
