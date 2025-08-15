@@ -102,11 +102,11 @@ ruff check .
 ```
 
 ### TODO
-
-* Automated test suite
+* fix mmpose step
+* fix test suite
 * Improve MotionBERT ↔ Rigify bone‑map
 * UI polish & live progress bar
-* Remote / URL video inputs
+* URL video inputs
 * Attempt to make it work with non rigify rigs
 
 ## Credits
