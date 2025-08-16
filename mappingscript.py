@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-
 #  Multi-Person Video-2-Rigify  –  one-click ML pipeline for Blender
 from __future__ import annotations
 

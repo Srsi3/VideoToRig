@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """
-Video2Rigify - Outside-Blender Test Suite
+Video2Rigify - Test Suite
 =========================================
 
 Purpose
 -------
 A fast, self-contained test runner for the Multi-Person Video-2-Rigify
-pipeline that you can run *without* Blender. It validates:
+pipeline that validates:
 
 1) Environment & versions (torch/mmcv/mmdet/mmpose)
 2) MMPose demo on an image (produces predictions)
@@ -86,9 +86,9 @@ def detect_device(py: Path) -> str:
         return "cpu"
 
 
-# ------------------------------------------------------------------
+
 # Embedded pipeline stub (same logic as the add‑on; multi‑person + chunks)
-# ------------------------------------------------------------------
+
 PIPELINE_STUB = r"""#!/usr/bin/env python3
 import json, argparse, subprocess, tempfile, sys, os, math, logging
 from pathlib import Path
