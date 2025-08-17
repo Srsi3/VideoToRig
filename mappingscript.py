@@ -5,8 +5,8 @@ from __future__ import annotations
 bl_info = {
     "name":        "Multi-Person Video-2-Rigify",
     "author":      "Samir Saldanha",
-    "version":     (0, 5, 1),
-    "blender":     (4, 0, 0),
+    "version":     (0, 6, 1),
+    "blender":     (4, 5, 0),
     "location":    "View3D ▸ Sidebar ▸ Video 2 Rigify",
     "description": "Video → MMPose → MotionBERT → Rigify (multi-person)",
     "category":    "Animation",
