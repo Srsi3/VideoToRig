@@ -12,7 +12,6 @@ bl_info = {
     "category":    "Animation",
 }
 
-#  Imports
 import bpy, os, sys, shutil, subprocess, tempfile, platform, venv, logging, importlib, importlib.util, json
 from pathlib import Path
 from bpy.types   import AddonPreferences, Operator, Panel, PropertyGroup
@@ -20,7 +19,6 @@ from bpy.props   import (StringProperty, BoolProperty, IntProperty,
                          FloatProperty, PointerProperty)
 
 
-#  Constants
 ADDON_ID      = __package__ or __name__
 REQ_MODULES   = ("torch", "mmcv", "mmpose", "numpy")
 ENV_DIRNAME   = "video2rigify_env"
