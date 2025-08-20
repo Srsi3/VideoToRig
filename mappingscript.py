@@ -554,7 +554,7 @@ class V2R_OT_Run(Operator):
                 return {'CANCELLED'}
 
             # Parse JSON of BVH parts from stub's stdout (support old/new schema)
-            tracks = []  # list of { 'id': int, 'parts': [path, ...] }
+            tracks = []  
             for line in proc.stdout.splitlines():
                 try:
                     obj = json.loads(line)
