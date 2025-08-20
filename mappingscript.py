@@ -767,3 +767,4 @@ def unregister():
     if hasattr(bpy.types.Scene, "v2r_settings"):
         del bpy.types.Scene.v2r_settings
     log.info("Add-on unregistered")
+
